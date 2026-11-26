@@ -10,7 +10,7 @@
 <body>
 <header><div class="bar"><a class="brand" href="#top"><i class="logo" aria-hidden="true">≋</i>Tracepick</a><a class="method-link" href="#method">设计依据 ↘</a></div></header>
 <main id="top">
-  <div class="intro"><h1>Sanger 测序引物设计</h1><p>输入双链 DNA 模板，为整段序列或关注的位点选择最多 5 条测序引物。</p></div>
+  <div class="intro"><h1>Sanger 测序引物设计</h1><p>输入双链 DNA 模板，按所需数量选择候选引物，或自动规划整段模板的测序覆盖。</p></div>
   <form id="form" novalidate>
     <div class="inputcard card">
       <div class="sectionhead"><label for="dna">模板序列</label><div class="tools"><button type="button" id="example">载入示例</button><button type="button" id="import">导入 FASTA</button><input hidden type="file" id="file" accept=".fa,.fasta,.fna,.txt,text/plain"></div></div>
@@ -23,7 +23,9 @@
       <label>读序方向<select id="dir"><option value="both">正向和反向</option><option value="F">仅正向 →</option><option value="R">仅反向 ←</option></select></label></div>
       <div class="extra"><div class="pair"><label>目标起点（bp）<input id="start" type="number" min="1" step="1" value="1" aria-describedby="target-note"></label><label>目标终点（bp）<input id="stop" type="number" min="1" step="1" value="1" aria-describedby="target-note"></label></div><small id="target-note">首碱基为 1，两端均计入。验证单个位点时，两栏填相同坐标。</small></div>
       <section class="readsettings" aria-labelledby="read-title"><h2 id="read-title">预计读段范围</h2><div class="pair"><label>起始距离（bp）<input id="first" type="number" min="1" max="1500" value="30"></label><label>最远距离（bp）<input id="last" type="number" min="1" max="1500" value="750"></label></div><small>从引物 3′ 端沿延伸方向计数，第一枚新碱基距离为 1。可按测序平台的经验调整。</small></section>
-      <div class="actions"><span>序列仅在本机浏览器中计算</span><button type="submit" id="go">设计测序引物 <b>→</b></button></div>
+      <div class="quantity"><label for="count">期望引物数量（条）</label><input id="count" type="number" min="1" step="1" value="5"></div>
+      <div class="actions"><span>序列仅在本机浏览器中计算</span><div class="run-buttons"><button type="submit" id="go">按数量设计 <b>→</b></button><button type="submit" id="global">全局测序覆盖</button></div></div>
+      <small class="global-note">全局模式按当前方向与读段范围自动补足全模板覆盖，条数由可用位点决定。</small>
     </div>
   </form>
   <p id="status" role="status" aria-live="polite"></p>
@@ -31,15 +33,18 @@
     <div class="resulthead"><div><h2>候选引物 <span id="num"></span></h2><p id="summary"></p></div><button id="export" type="button">导出 TSV ↓</button></div>
     <div id="map" class="card"></div>
     <div class="tablewrap card"><table><thead><tr><th>引物</th><th>订购序列（5′ → 3′）</th><th>结合区 / bp</th><th>长度 / nt</th><th>Tm / °C</th><th>GC / %</th><th>预计读段 / bp</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <section class="method" aria-labelledby="risk-heading"><h3 id="risk-heading">逐条引物的测序风险位置</h3><p>坐标对应输入模板。起读前延伸区指引物末端到预计读段起点之间经过的碱基。</p>
+      <div class="tablewrap card"><table class="risk-table"><thead><tr><th>引物</th><th>结合区</th><th>起读前延伸区</th><th>预计读段</th></tr></thead><tbody id="risk-rows"></tbody></table></div></section>
     <section class="method"><h3>筛选统计与覆盖缺口</h3><div id="stats"></div></section>
   </section>
   <section class="method" id="method"><h2>设计依据与适用范围</h2>
     <p>适用于已知序列的纯化双链 DNA。坐标对应输入链，每条候选单独进行一次 Sanger 反应。环状模板请粘贴完整的一圈序列。</p>
     <p>默认长度 18–25 nt、GC 40–60%、Tm 55–65 °C。采用 SantaLucia 最近邻模型计算 Tm，假设单价盐 50 mM、总链浓度 50 nM、Mg²⁺ 为 0。优先选择 Tm 接近 60 °C 的候选。</p>
     <p>排除同聚四碱基、连续四个相同二核苷酸、明显连续自身互补，以及输入模板两条链上的额外结合位点（末端 12 nt 完全匹配，或全长至多 1 处替换）。最终候选经 Primer3 THAL 复核，发卡和同源二聚体的预测 Tm 均须低于 47 °C。特异性检查仅覆盖输入模板和上述错配模型。</p>
+    <p>模板风险按滑窗扫描：20 bp 内 GC ≥70%、同一碱基连续 ≥6 个、同一二核苷酸连续 ≥5 组，以及间隔 3–12 nt 的两段 6 bp 完全倒置互补序列。重叠标记按类型合并。疑似发卡表示序列特征，实际峰图可用于判断是否影响读通。</p>
     <p>整段模式优先增加新覆盖，其次增加同一位置的反向复核。目标模式要求每条读段完整包含目标。覆盖图按设定距离推算，实际可读区间以测序峰图为准。</p>
     <p><a href="https://www.biotech.cornell.edu/core-facilities-brc/facilities/genomics-facility/qc-troubleshooting/sanger-sequencing-primer-design">Cornell 测序指南 ↗</a>　<a href="https://primer3.org/manual.html">Primer3 手册 ↗</a>　<a href="https://github.com/Edinburgh-Genome-Foundry/Primavera">Primavera ↗</a>　<a href="native-source.zip">热力学模块源码及许可 ↓</a></p>
   </section>
-</main><footer><span>Tracepick</span><span>Sanger primer designer · v1.1</span></footer>
-<script src="thermo-data.js"></script><script src="thermo.js"></script><script src="engine.js"></script><script src="app.js"></script>
+</main><footer><span>Tracepick</span><span>Sanger primer designer · v1.2</span></footer>
+<script src="thermo-data.js"></script><script src="thermo.js"></script><script src="planning.js"></script><script src="risks.js"></script><script src="engine.js"></script><script src="app.js"></script>
 </body></html>

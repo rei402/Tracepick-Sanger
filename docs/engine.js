@@ -120,11 +120,13 @@ const Sanger = (() => {
     const thermo = typeof SangerThermo!=="undefined" ? SangerThermo : require("./thermo.js");
     const seq=parse(raw), n=seq.length;
     const opt={circular:false, direction:"both", mode:"coverage", start:1, stop:n,
-      first:50, last:500, ...settings};
-    if (!["both","F","R"].includes(opt.direction) || !["coverage","target"].includes(opt.mode) ||
+      first:50, last:500, count:5, ...settings};
+    if (!["both","F","R"].includes(opt.direction) || !["coverage","target","global"].includes(opt.mode) ||
         typeof opt.circular !== "boolean") throw Error("未知的设计设置。");
     if (![opt.first,opt.last].every(Number.isSafeInteger) || opt.first<1 || opt.last<opt.first || opt.last>1500)
       throw Error("预计读段的起止距离须为 1–1,500 的整数，且起点不大于终点。");
+    if(opt.mode!=="global" && (!Number.isSafeInteger(opt.count) || opt.count<1))
+      throw Error("引物数量必须是正整数。");
     let target = [[0,n]];
     if (opt.mode==="target") {
       if (![opt.start,opt.stop].every(x=>Number.isSafeInteger(x)&&x>=1&&x<=n) ||
@@ -159,43 +161,14 @@ const Sanger = (() => {
         pool.push({dir,end3,oligo,tm:temp,gc,penalty,bind:parts(left,len,n,opt.circular),read});
       }
     }
-    const picked=[], depth=new Uint8Array(n), byDir={F:new Uint8Array(n),R:new Uint8Array(n)};
-    const rejected=new Set(), tested=new Map();
-    while (picked.length<5) {
-      function uncoveredPrefix(arr) {
-        const prefix = new Uint32Array(n+1);
-        for (let i=0;i<n;i++) prefix[i+1]=prefix[i]+Number(arr[i]===0);
-        return prefix;
-      }
-      const all=uncoveredPrefix(depth), forward=uncoveredPrefix(byDir.F), reverse=uncoveredPrefix(byDir.R);
-      const ranked=[];
-      for (const p of pool) {
-        if (rejected.has(p.oligo)) continue;
-        if (picked.some(q => {
-          const dist=Math.abs(q.end3-p.end3);
-          return p.dir===q.dir && (opt.circular ? Math.min(dist,n-dist) : dist)<12;
-        })) continue;
-        let fresh=0, strandFresh=0;
-        const same=p.dir==="F" ? forward : reverse;
-        for (const [a,b] of p.read) {
-          fresh+=all[b]-all[a]; strandFresh+=same[b]-same[a];
-        }
-        // Lexicographic priorities; bounded penalty is < 10 and read length <= 1500.
-        const utility=opt.mode==="coverage" ? fresh*20000+strandFresh*10-p.penalty :
-          (picked.some(q=>q.dir===p.dir) ? 0 : 20)-p.penalty;
-        ranked.push({p,utility});
-      }
-      ranked.sort((a,b)=>b.utility-a.utility);
-      let best=null;
-      for(const {p} of ranked) {
-        if(!tested.has(p.oligo)) tested.set(p.oligo,thermo.calculate(p.oligo));
-        const structure=tested.get(p.oligo);
-        if(structure.hairpin>=47 || structure.homodimer>=47) {rejected.add(p.oligo);continue;}
-        best={...p,...structure};break;
-      }
-      if (!best) break;
-      picked.push(best);
-      for (const [a,b] of best.read) for (let i=a;i<b;i++) {depth[i]++;byDir[best.dir][i]++;}
+    const planner=typeof TracepickPlanning!=="undefined" ? TracepickPlanning : require("./planning.js");
+    const risks=typeof TracepickRisks!=="undefined" ? TracepickRisks : require("./risks.js");
+    const {picked,depth,byDir,checked,rejected}=planner.select(pool,n,opt,thermo);
+    const features=risks.scan(seq,opt.circular,rc);
+    for(const p of picked) {
+      const early=Math.min(opt.first-1,n-p.oligo.length);
+      const lead=parts(p.dir==="F" ? p.end3+1 : p.end3-early,early,n,opt.circular);
+      p.warnings=risks.annotate(features,{bind:p.bind,lead,read:p.read});
     }
     const gaps=[];
     for (let i=0;i<n;) {
@@ -204,7 +177,7 @@ const Sanger = (() => {
       while(i<n && !depth[i]) i++;
       gaps.push([start,i]);
     }
-    return {n,opt,target,picked,counts,pass:pool.length,gaps,checked:tested.size,rejected:rejected.size,covered:n-width(gaps),
+    return {n,opt,target,picked,counts,pass:pool.length,gaps,checked,rejected,features,covered:n-width(gaps),
       dual:byDir.F.reduce((total,val,i)=>total+Number(val>0 && byDir.R[i]>0),0)};
   }
   return {parse,tm,rc,design,filters,selfComplementary};
